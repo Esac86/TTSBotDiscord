@@ -15,10 +15,6 @@ import dotenv from 'dotenv'
 
 dotenv.config()
 
-const TOKEN = process.env.DISCORD_TOKEN
-const CHANNEL_ID = process.env.CHANNEL_ID
-const PORT = 3000
-
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -28,76 +24,114 @@ const client = new Client({
   ]
 })
 
-const channels = new Map()
-const limpiar = t =>
-  t
+const voiceChannels = new Map()
+
+function cleanText(text) {
+  return text
     .replace(/<a?:\w+:\d+>/g, '')
     .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '')
     .trim()
+}
 
-async function tts(vc, texto) {
-  let ch = channels.get(vc.id)
-  if (!ch) {
-    const c = joinVoiceChannel({
-      channelId: vc.id,
-      guildId: vc.guild.id,
-      adapterCreator: vc.guild.voiceAdapterCreator
+async function playTextToSpeech(voiceChannel, text) {
+  let channelData = voiceChannels.get(voiceChannel.id)
+
+  if (!channelData) {
+    const connection = joinVoiceChannel({
+      channelId: voiceChannel.id,
+      guildId: voiceChannel.guild.id,
+      adapterCreator: voiceChannel.guild.voiceAdapterCreator
     })
-    const p = createAudioPlayer()
-    c.subscribe(p)
-    ch = { connection: c, player: p, queue: [] }
-    channels.set(vc.id, ch)
 
-    c.on(VoiceConnectionStatus.Disconnected, () => channels.delete(vc.id))
+    const player = createAudioPlayer()
+    connection.subscribe(player)
+
+    channelData = {
+      connection: connection,
+      player: player,
+      queue: []
+    }
+
+    voiceChannels.set(voiceChannel.id, channelData)
+
+    connection.on(VoiceConnectionStatus.Disconnected, () => {
+      voiceChannels.delete(voiceChannel.id)
+    })
 
     try {
-      await entersState(c, VoiceConnectionStatus.Ready, 5000)
-    } catch {
-      c.destroy()
+      await entersState(connection, VoiceConnectionStatus.Ready, 5000)
+    } catch (error) {
+      connection.destroy()
       return
     }
 
-    p.on(AudioPlayerStatus.Idle, () => {
-      if (ch.queue.length) p.play(ch.queue.shift())
+    player.on(AudioPlayerStatus.Idle, () => {
+      if (channelData.queue.length > 0) {
+        player.play(channelData.queue.shift())
+      }
     })
   }
 
-  const url = googleTTS.getAudioUrl(texto, { lang: 'es', slow: false })
-  https
-    .get(url, res => {
-      const resource = createAudioResource(res, { inputType: StreamType.Arbitrary })
-      ch.queue.push(resource)
-      if (ch.player.state.status === AudioPlayerStatus.Idle) ch.player.play(ch.queue.shift())
+  const audioUrl = googleTTS.getAudioUrl(text, {
+    lang: 'es',
+    slow: false
+  })
+
+  https.get(audioUrl, response => {
+    const audioResource = createAudioResource(response, {
+      inputType: StreamType.Arbitrary
     })
-    .on('error', () => {})
+
+    channelData.queue.push(audioResource)
+
+    if (channelData.player.state.status === AudioPlayerStatus.Idle) {
+      channelData.player.play(channelData.queue.shift())
+    }
+  }).on('error', error => {
+    console.error('Error descargando audio TTS:', error)
+  })
 }
 
-client.once('ready', () => console.log(`✅ Bot conectado como ${client.user.tag}`))
+client.once('ready', () => {
+  console.log(`Bot conectado como ${client.user.tag}`)
+})
 
-client.on('messageCreate', m => {
-  if (m.author.bot || m.channel.id !== CHANNEL_ID) return
-  const vc = m.member?.voice?.channel
-  if (!vc) return m.reply('❌ Debes estar en un canal de voz')
-  const txt = limpiar(m.content)
-  txt && tts(vc, txt)
+client.on('messageCreate', message => {
+  if (message.author.bot) return
+  if (message.channel.id !== process.env.CHANNEL_ID) return
+
+  const voiceChannel = message.member?.voice?.channel
+
+  if (!voiceChannel) {
+    message.reply('Debes estar en un canal de voz')
+    return
+  }
+
+  const cleanedText = cleanText(message.content)
+
+  if (cleanedText) {
+    playTextToSpeech(voiceChannel, cleanedText)
+  }
 })
 
 client.on('voiceStateUpdate', (oldState, newState) => {
   if (oldState.channelId === newState.channelId) return
 
-  const vc = oldState.channel || newState.channel
-  if (!vc) return
+  const voiceChannel = oldState.channel || newState.channel
+  if (!voiceChannel) return
 
-  const botInVC = vc.members.get(client.user.id)
-  if (botInVC && vc.members.size === 1) {
+  const botInChannel = voiceChannel.members.get(client.user.id)
+
+  if (botInChannel && voiceChannel.members.size === 1) {
     setTimeout(() => {
-      if (vc.members.size === 1) {
-        const data = channels.get(vc.id)
-        if (data) {
-          data.player.stop()
-          data.connection.destroy()
-          channels.delete(vc.id)
-          console.log(`👋 Bot desconectado de ${vc.name} (solo)`)
+      if (voiceChannel.members.size === 1) {
+        const channelData = voiceChannels.get(voiceChannel.id)
+
+        if (channelData) {
+          channelData.player.stop()
+          channelData.connection.destroy()
+          voiceChannels.delete(voiceChannel.id)
+          console.log(`Bot desconectado de ${voiceChannel.name} (solo en el canal)`)
         }
       }
     }, 5000)
@@ -105,8 +139,18 @@ client.on('voiceStateUpdate', (oldState, newState) => {
 })
 
 const app = express()
-app.head('/', (_, res) => res.sendStatus(200))
-app.get('/', (_, res) => res.send('✅ Bot online'))
-app.listen(PORT, () => console.log(`🌐 Servidor activo en puerto ${PORT}`))
+const PORT = process.env.PORT || 3000
 
-client.login(TOKEN)
+app.head('/', (req, res) => {
+  res.sendStatus(200)
+})
+
+app.get('/', (req, res) => {
+  res.send('Bot en funcionamiento')
+})
+
+app.listen(PORT, () => {
+  console.log(`Servidor web escuchando en el puerto ${PORT}`)
+})
+
+client.login(process.env.DISCORD_TOKEN)
