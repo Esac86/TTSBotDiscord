@@ -25,16 +25,18 @@ async function tts(vc, texto) {
     channels.set(vc.id, ch)
     c.on(VoiceConnectionStatus.Disconnected, () => channels.delete(vc.id))
     try { await entersState(c, VoiceConnectionStatus.Ready, 5000) } catch { c.destroy(); return }
-    p.on(AudioPlayerStatus.Idle, () => ch.queue.length && p.player.play(ch.queue.shift()))
+    p.on(AudioPlayerStatus.Idle, () => { if (ch.queue.length) p.play(ch.queue.shift()) })
   }
   const url = googleTTS.getAudioUrl(texto, { lang: 'es', slow: false })
   https.get(url, res => {
     const resource = createAudioResource(res, { inputType: StreamType.Arbitrary })
-    ch.player.state.status === AudioPlayerStatus.Idle ? ch.player.play(resource) : ch.queue.push(resource)
-  }).on('error', () => { })
+    ch.queue.push(resource)
+    if (ch.player.state.status === AudioPlayerStatus.Idle) ch.player.play(ch.queue.shift())
+  }).on('error', () => {})
 }
 
 client.once('ready', () => console.log(`✅ Bot conectado como ${client.user.tag}`))
+
 client.on('messageCreate', m => {
   if (m.author.bot || m.channel.id !== CHANNEL_ID) return
   const vc = m.member?.voice?.channel
@@ -42,6 +44,7 @@ client.on('messageCreate', m => {
   const txt = limpiar(m.content)
   txt && tts(vc, txt)
 })
+
 client.on('voiceStateUpdate', (o, n) => {
   const ch = (o.channel || n.channel)?.members.get(client.user.id)
   if (ch && ch.voice.channel.members.size === 1) {
