@@ -11,6 +11,8 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@discordjs/opus": "^0.10.0",
+    "@discordjs/voice": "^0.16.0",
     "@snazzah/davey": "^0.1.7",
     "discord.js": "^14.23.2",
     "dotenv": "^16.4.5",
