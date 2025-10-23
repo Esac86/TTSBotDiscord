@@ -1,14 +1,16 @@
 /**
- * Bot TTS Discord – Plug & Play
- * Solo necesitas configurar el .env con:
+ * Bot TTS Discord (versión con archivos .mp3)
+ * 
+ * Configura tu .env con:
  * DISCORD_TOKEN=tu_token
  * CHANNEL_ID=id_canal_texto
  */
 
 import { Client, GatewayIntentBits } from 'discord.js'
-import { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, VoiceConnectionStatus, entersState, StreamType } from '@discordjs/voice'
+import { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, VoiceConnectionStatus, entersState } from '@discordjs/voice'
 import googleTTS from 'google-tts-api'
 import https from 'https'
+import fs from 'fs'
 import express from 'express'
 import dotenv from 'dotenv'
 
@@ -16,7 +18,7 @@ dotenv.config()
 
 const TOKEN = process.env.DISCORD_TOKEN
 const CHANNEL_ID = process.env.CHANNEL_ID
-const PORT = process.env.PORT || 3000
+const PORT = 3000
 
 const client = new Client({
   intents: [
@@ -29,14 +31,14 @@ const client = new Client({
 
 const channels = new Map()
 
-// --- Función para limpiar texto ---
+// --- Limpia el texto antes de generar el TTS ---
 const limpiarTexto = texto =>
-  texto.replace(/<a?:\w+:\d+>/g, '')
-        .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '')
+  texto.replace(/<a?:\w+:\d+>/g, '') 
+        .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '') 
         .trim()
 
-// --- Función para reproducir TTS ---
-async function reproducirTTS(voiceChannel, texto) {
+// --- Genera y reproduce un TTS desde archivo .mp3 ---
+async function reproducirTTS(voiceChannel, texto, msgId) {
   let ch = channels.get(voiceChannel.id)
 
   if (!ch) {
@@ -63,16 +65,29 @@ async function reproducirTTS(voiceChannel, texto) {
   }
 
   const url = googleTTS.getAudioUrl(texto, { lang: 'es', slow: false })
+  const filePath = `./tts-${msgId}.mp3`
+
+  const file = fs.createWriteStream(filePath)
   https.get(url, res => {
-    const resource = createAudioResource(res, { inputType: StreamType.Arbitrary })
-    if (ch.player.state.status === AudioPlayerStatus.Idle) ch.player.play(resource)
-    else ch.queue.push(resource)
+    res.pipe(file)
+    file.on('finish', () => {
+      file.close(() => {
+        const resource = createAudioResource(filePath)
+        if (ch.player.state.status === AudioPlayerStatus.Idle) ch.player.play(resource)
+        else ch.queue.push(resource)
+
+        ch.player.once(AudioPlayerStatus.Idle, () => {
+          if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
+        })
+      })
+    })
   })
 }
 
-// --- Eventos ---
+// --- Evento: Bot listo ---
 client.once('ready', () => console.log(`✅ Bot conectado como ${client.user.tag}`))
 
+// --- Evento: Mensaje recibido ---
 client.on('messageCreate', msg => {
   if (msg.author.bot) return
   if (msg.channel.id !== CHANNEL_ID) return
@@ -83,11 +98,11 @@ client.on('messageCreate', msg => {
   const texto = limpiarTexto(msg.content)
   if (!texto) return
 
-  console.log(`🗣️ TTS: "${texto}"`)
-  reproducirTTS(voiceChannel, texto)
+  console.log(`🗣️ ${msg.author.username}: "${texto}"`)
+  reproducirTTS(voiceChannel, texto, msg.id)
 })
 
-// Auto-desconexión si queda solo
+// --- Evento: Auto-desconexión si queda solo ---
 client.on('voiceStateUpdate', (oldState, newState) => {
   const channel = oldState.channel || newState.channel
   if (!channel) return
@@ -104,7 +119,7 @@ client.on('voiceStateUpdate', (oldState, newState) => {
   }
 })
 
-// --- Servidor Express para uptime ---
+// --- Servidor Express para uptime (Render, etc.) ---
 const app = express()
 app.head('/', (_, res) => res.sendStatus(200))
 app.get('/', (_, res) => res.send('✅ Bot online'))
