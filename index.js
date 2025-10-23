@@ -3,9 +3,14 @@ import { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerSt
 import googleTTS from 'google-tts-api'
 import fs from 'fs'
 import https from 'https'
+import express from 'express'
+import dotenv from 'dotenv'
 
-const TOKEN = 'MTM3NDg2MDQwODk2MzIwNzIzOQ.G37JYC.fSLFnRNdpGCOe5mQKVrSZK7hD0jT_3ml-BbHsQ'
-const CHANNEL_ID = '1430927653027971133' 
+dotenv.config()
+
+const TOKEN = process.env.DISCORD_TOKEN
+const CHANNEL_ID = process.env.CHANNEL_ID
+const PORT = process.env.PORT || 3000
 
 const client = new Client({
   intents: [
@@ -16,7 +21,7 @@ const client = new Client({
   ]
 })
 
-const players = new Map() 
+const players = new Map()
 
 client.once('ready', () => {
   console.log(`✅ Conectado como ${client.user.tag}`)
@@ -26,15 +31,19 @@ client.on('messageCreate', async msg => {
   if (msg.author.bot) return
   if (msg.channel.id !== CHANNEL_ID) return
 
-  const voiceChannel = msg.member.voice.channel
-  if (!voiceChannel) {
-    return msg.reply('❌ Debes estar en un canal de voz para usar el TTS.')
-  }
+  const voiceChannel = msg.member?.voice?.channel
+  if (!voiceChannel) return msg.reply('❌ Debes estar en un canal de voz para usar el TTS.')
 
-  const texto = `${msg.member.displayName} dice: ${msg.content}`
-  console.log(`🗣️ ${texto}`)
+  const textoLimpio = msg.content
+    .replace(/<a?:\w+:\d+>/g, '')
+    .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '')
+    .trim()
 
-  const url = googleTTS.getAudioUrl(texto, { lang: 'es', slow: false })
+  if (!textoLimpio) return
+
+  console.log(`🗣️ ${textoLimpio}`)
+
+  const url = googleTTS.getAudioUrl(textoLimpio, { lang: 'es', slow: false })
   const file = `./tts-${msg.id}.mp3`
 
   const fileStream = fs.createWriteStream(file)
@@ -65,3 +74,8 @@ client.on('messageCreate', async msg => {
 })
 
 client.login(TOKEN)
+
+const app = express()
+app.head('/', (_, res) => res.sendStatus(200))
+app.get('/', (_, res) => res.send('✅ Bot online'))
+app.listen(PORT, () => console.log(`🌐 Endpoint activo`))
