@@ -19,3 +19,4 @@ coverage/
 tts-*.mp3
 docker-compose.override.yml
 .dockerignore
+.env
